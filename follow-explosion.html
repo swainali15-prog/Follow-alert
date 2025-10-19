@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TikTok overlay</title>
+  <style>
+    /* ensure transparent background so the stream shows through */
+    html,body { height:100%; margin:0; background:transparent; }
+    /* container uses full vertical size for 1080x1920 layout */
+    .overlay {
+      position:relative;
+      width:100%;
+      height:100%;
+      pointer-events:none; /* so clicks pass through by default */
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    /* example alert box (bottom-left) */
+    .alert {
+      position:absolute;
+      left:24px;
+      bottom:140px;
+      background:rgba(0,0,0,0.6);
+      color: #fff;
+      padding:12px 18px;
+      border-radius:12px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+      transform: translateY(20px);
+      opacity:0;
+      transition: opacity .25s ease, transform .25s ease;
+      pointer-events:auto; /* allow interactions only on this element */
+      max-width: 420px;
+      font-size:20px;
+    }
+
+    .alert.show { opacity:1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="overlay">
+    <div id="alertBox" class="alert" aria-live="polite"></div>
+  </div>
+
+  <script>
+    // simple function you can call in devtools to test the alert
+    function showAlert(text, timeout = 3500) {
+      const box = document.getElementById('alertBox');
+      box.textContent = text;
+      box.classList.add('show');
+      clearTimeout(box._t);
+      box._t = setTimeout(()=> box.classList.remove('show'), timeout);
+    }
+
+    // Example: when the page loads, show a test alert for 2s
+    window.addEventListener('load', ()=> {
+      // comment this out in production
+      setTimeout(()=> showAlert('Overlay loaded — test alert'), 600);
+    });
+
+    // If you're integrating with widgets/services, they usually push events to the page
+    // or provide a URL you paste into the Link source (StreamElements, Streamlabs).
+  </script>
+</body>
+</html>
