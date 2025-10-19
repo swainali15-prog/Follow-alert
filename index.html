@@ -1,65 +1,376 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TikTok overlay</title>
-  <style>
-    /* ensure transparent background so the stream shows through */
-    html,body { height:100%; margin:0; background:transparent; }
-    /* container uses full vertical size for 1080x1920 layout */
-    .overlay {
-      position:relative;
-      width:100%;
-      height:100%;
-      pointer-events:none; /* so clicks pass through by default */
-      font-family: Arial, Helvetica, sans-serif;
-    }
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Follow Explosion Overlay</title>
+<style>
+  /* Transparent background for overlay usage */
+  html,body { height:100%; margin:0; background:transparent; overflow:hidden; }
+  :root{
+    --safe-width:1080px; /* orientation hint */
+    --safe-height:1920px;
+  }
 
-    /* example alert box (bottom-left) */
-    .alert {
-      position:absolute;
-      left:24px;
-      bottom:140px;
-      background:rgba(0,0,0,0.6);
-      color: #fff;
-      padding:12px 18px;
-      border-radius:12px;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
-      transform: translateY(20px);
-      opacity:0;
-      transition: opacity .25s ease, transform .25s ease;
-      pointer-events:auto; /* allow interactions only on this element */
-      max-width: 420px;
-      font-size:20px;
-    }
+  /* full overlay container */
+  .overlay {
+    position:relative;
+    width:100%;
+    height:100%;
+    pointer-events:none; /* clicks pass through */
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
 
-    .alert.show { opacity:1; transform: translateY(0); }
-  </style>
+  /* Canvas occupies full area */
+  canvas#fx {
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    display:block;
+  }
+
+  /* Centered alert text */
+  .alert-wrap {
+    position:absolute;
+    left:50%;
+    top:42%;
+    transform:translate(-50%,-50%);
+    text-align:center;
+    pointer-events:auto; /* allow interaction if needed on text (can be set to none) */
+    width:min(88vw, 960px);
+    max-width:960px;
+  }
+
+  .headline {
+    font-weight:800;
+    letter-spacing: -2px;
+    font-size: clamp(32px, 9vw, 120px); /* responsive big text */
+    color: #ffd86b;
+    text-shadow:
+      0 6px 18px rgba(0,0,0,0.6),
+      0 2px 2px rgba(0,0,0,0.4);
+    transform-origin:center;
+    will-change: transform, opacity;
+    opacity:0;
+  }
+
+  .sub {
+    margin-top:12px;
+    font-weight:700;
+    font-size: clamp(18px, 4.2vw, 44px);
+    color:#ffffff;
+    text-shadow: 0 4px 14px rgba(0,0,0,0.6);
+    opacity:0;
+    transform-origin:center;
+  }
+
+  /* small accent glow circle behind the headline to sell the explosion */
+  .glow {
+    position:absolute;
+    left:50%;
+    top:42%;
+    transform:translate(-50%,-50%);
+    width:0; height:0;
+    pointer-events:none;
+    filter: blur(24px);
+    opacity:0;
+    transition: opacity .2s linear;
+  }
+
+  /* fade class toggled by JS */
+  .show .headline { animation: headlineIn .55s cubic-bezier(.15,.9,.28,1) forwards; }
+  .show .sub { animation: subIn .55s cubic-bezier(.2,.9,.25,1) .08s forwards; }
+
+  @keyframes headlineIn {
+    0% { opacity:0; transform: scale(0.5) translateY(10px); filter: blur(6px); }
+    60% { transform: scale(1.07) translateY(-8px); opacity:1; filter: blur(0); }
+    100% { transform: scale(1) translateY(0); opacity:1; }
+  }
+  @keyframes subIn {
+    from { opacity:0; transform: translateY(6px) scale(.98); }
+    to { opacity:1; transform: translateY(0) scale(1); }
+  }
+
+  /* helper to keep overlay responsive on very small screens */
+  @media (max-height:700px) {
+    .alert-wrap { top:38%; }
+  }
+
+  /* accessibility - hide from mouse but keep visible to screen readers */
+  .sr-only { position: absolute; left:-9999px; top:auto; width:1px; height:1px; overflow:hidden; }
+</style>
 </head>
 <body>
-  <div class="overlay">
-    <div id="alertBox" class="alert" aria-live="polite"></div>
+  <div class="overlay" id="overlay">
+    <canvas id="fx" aria-hidden="true"></canvas>
+
+    <!-- Glow behind text to sell the blast -->
+    <div class="glow" id="glow"></div>
+
+    <div class="alert-wrap" id="alert">
+      <div class="headline" id="headline" aria-live="polite">NEW FOLLOWER!</div>
+      <div class="sub" id="sub">someone</div>
+    </div>
+
+    <!-- for screen reader users -->
+    <div class="sr-only" id="sr-announcer" role="status" aria-live="polite"></div>
   </div>
 
-  <script>
-    // simple function you can call in devtools to test the alert
-    function showAlert(text, timeout = 3500) {
-      const box = document.getElementById('alertBox');
-      box.textContent = text;
-      box.classList.add('show');
-      clearTimeout(box._t);
-      box._t = setTimeout(()=> box.classList.remove('show'), timeout);
+<script>
+/*
+  follow-explosion.html
+  Usage:
+    - Call showFollow("username") to trigger the explosion + smoke and display the name.
+    - Remove or comment the demo trigger at bottom if you don't want it to auto-fire.
+*/
+
+(() => {
+  // Canvas setup & utilities
+  const canvas = document.getElementById('fx');
+  const ctx = canvas.getContext('2d', { alpha: true });
+  let DPR = Math.max(1, window.devicePixelRatio || 1);
+
+  function resize() {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    canvas.width = Math.floor(w * DPR);
+    canvas.height = Math.floor(h * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  // initial resize
+  resize();
+  window.addEventListener('resize', () => {
+    DPR = Math.max(1, window.devicePixelRatio || 1);
+    resize();
+  });
+
+  // particle systems: explosion (sparks) + smoke clouds
+  const particles = [];
+  const smokes = [];
+  let animating = false;
+
+  function rand(min, max) { return Math.random() * (max - min) + min; }
+  function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
+
+  // create explosion particles at center
+  function spawnExplosion(x, y, count = 120, color = null) {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = rand(2, 14) * (0.9 + Math.random()*0.8);
+      const life = rand(700, 1500); // ms
+      const size = rand(2, 6);
+      const hue = color ? color : randInt(28, 52); // warm orange-yellowish
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed * 0.7 - rand(1, 6),
+        ax: 0,
+        ay: 0.06 + Math.random() * 0.08, // gravity
+        size,
+        life, age: 0,
+        alpha: 1,
+        hue,
+        spin: rand(-0.06, 0.06)
+      });
+    }
+  }
+
+  // create smoke puffs that rise and expand
+  function spawnSmoke(x, y, count = 6) {
+    for (let i = 0; i < count; i++) {
+      smokes.push({
+        x: x + rand(-40, 40),
+        y: y + rand(-10, 40),
+        vx: rand(-0.3, 0.3),
+        vy: rand(-0.6, -1.8),
+        size: rand(18, 46),
+        growth: rand(0.08, 0.35),
+        life: rand(2000, 4200),
+        age: 0,
+        alpha: rand(0.42, 0.9),
+        rot: rand(0, Math.PI*2),
+        rotSpeed: rand(-0.02, 0.02)
+      });
+    }
+  }
+
+  // optional background flash for brief frame (to sell explosion)
+  let flash = { alpha: 0, life: 0 };
+
+  function triggerBlast(cx, cy, name) {
+    // spawn warm explosion + smoke + secondary ember bursts
+    spawnExplosion(cx, cy, 110);
+    spawnSmoke(cx, cy, 8);
+    // smaller secondary bursts
+    for (let i = 0; i < 12; i++) {
+      setTimeout(() => spawnExplosion(cx + rand(-90,90), cy + rand(-60,60), randInt(8,22)), rand(60, 520));
+    }
+    flash.alpha = 0.85;
+    flash.life = 240;
+  }
+
+  // animation loop
+  let last = performance.now();
+  function loop(now) {
+    const dt = now - last;
+    last = now;
+
+    // clear canvas (transparent)
+    ctx.clearRect(0,0,canvas.width/DPR, canvas.height/DPR);
+
+    // draw flash overlay
+    if (flash.life > 0) {
+      flash.life -= dt;
+      const a = Math.max(0, Math.min(1, flash.alpha * (flash.life / 240)));
+      ctx.save();
+      ctx.fillStyle = `rgba(255,240,200,${a})`;
+      ctx.fillRect(0,0,canvas.width/DPR, canvas.height/DPR);
+      ctx.restore();
     }
 
-    // Example: when the page loads, show a test alert for 2s
-    window.addEventListener('load', ()=> {
-      // comment this out in production
-      setTimeout(()=> showAlert('Overlay loaded — test alert'), 600);
-    });
+    // update and draw particles (sparks)
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.age += dt;
+      if (p.age >= p.life) { particles.splice(i,1); continue; }
+      // simple physics
+      p.vx += p.ax;
+      p.vy += p.ay;
+      p.x += p.vx * (dt / 16.66);
+      p.y += p.vy * (dt / 16.66);
+      // fade out as age approaches life
+      const t = p.age / p.life;
+      const alpha = Math.max(0, 1 - t);
+      // draw particle as glow circle
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size*3);
+      grd.addColorStop(0, `rgba(255,${210 - Math.floor(100*t)},0,${alpha*1})`);
+      grd.addColorStop(0.4, `rgba(${220 - Math.floor(60*t)},${160 - Math.floor(80*t)},0,${alpha*0.6})`);
+      grd.addColorStop(1, `rgba(0,0,0,0)`);
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size*1.8, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
 
-    // If you're integrating with widgets/services, they usually push events to the page
-    // or provide a URL you paste into the Link source (StreamElements, Streamlabs).
-  </script>
+    // update and draw smokes
+    for (let i = smokes.length - 1; i >= 0; i--) {
+      const s = smokes[i];
+      s.age += dt;
+      if (s.age >= s.life) { smokes.splice(i,1); continue; }
+      s.x += s.vx * (dt / 16.66);
+      s.y += s.vy * (dt / 16.66);
+      s.size += s.growth * (dt / 16.66) * 3;
+      s.rot += s.rotSpeed * (dt / 16.66);
+
+      const t = s.age / s.life;
+      const alpha = s.alpha * (1 - t) * 0.8;
+      // smoke is soft circle with radial gradient
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.rot);
+      const r = s.size;
+      const g = ctx.createRadialGradient(0,0, r*0.1, 0,0, r);
+      // smoke color (gray with warm tint close to explosion)
+      g.addColorStop(0, `rgba(200,190,180,${alpha})`);
+      g.addColorStop(0.6, `rgba(120,110,110,${alpha*0.6})`);
+      g.addColorStop(1, `rgba(80,80,80,0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(0,0,r,0,Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // continue anim loop only if active
+    if (particles.length || smokes.length || flash.life > 0) {
+      animating = true;
+      requestAnimationFrame(loop);
+    } else {
+      animating = false;
+    }
+  }
+
+  // Public trigger function - centers explosion at a visual focal point
+  const overlayEl = document.getElementById('overlay');
+  const headline = document.getElementById('headline');
+  const sub = document.getElementById('sub');
+  const sr = document.getElementById('sr-announcer');
+  const glow = document.getElementById('glow');
+  const alertWrap = document.getElementById('alert');
+
+  function computeCenter() {
+    // choose a point slightly above center for better composition
+    const rect = canvas.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height * 0.36 };
+  }
+
+  // convert DOM coords to canvas coords
+  function toCanvasCoords(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / DPR / rect.width;
+    const scaleY = canvas.height / DPR / rect.height;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+  }
+
+  // showFollow triggers the animation with provided display name
+  window.showFollow = function(name = "New Follower") {
+    // set text
+    headline.textContent = "NEW FOLLOWER!";
+    sub.textContent = name;
+    sr.textContent = `${name} followed`;
+
+    // show visual UI
+    alertWrap.classList.add('show');
+
+    // create glow circle effect behind text
+    const rect = alertWrap.getBoundingClientRect();
+    const g = glow;
+    const size = Math.max(rect.width, rect.height) * 1.4;
+    g.style.width = size + "px";
+    g.style.height = size + "px";
+    g.style.borderRadius = (size/2) + "px";
+    g.style.background = 'radial-gradient(circle at 50% 40%, rgba(255,220,120,0.95), rgba(255,160,60,0.55) 30%, rgba(255,120,40,0.14) 48%, rgba(0,0,0,0) 60%)';
+    g.style.opacity = '1';
+    // fade glow
+    setTimeout(()=> { g.style.transition = 'opacity .9s ease'; g.style.opacity = '0'; }, 120);
+
+    // compute explosion origin near the headline center
+    const wrapRect = alertWrap.getBoundingClientRect();
+    const centerX = wrapRect.left + wrapRect.width / 2;
+    const centerY = wrapRect.top + wrapRect.height / 2 - 30; // slightly above the text center
+    const ccoords = toCanvasCoords(centerX, centerY);
+
+    // trigger particle blast
+    triggerBlast(ccoords.x, ccoords.y);
+
+    // ensure animation loop is running
+    if (!animating) { animating = true; last = performance.now(); requestAnimationFrame(loop); }
+
+    // animate headline & sub in (already via CSS), then out after a while
+    // add micro shake to headline to sell force
+    headline.style.transition = 'transform .9s cubic-bezier(.2,.9,.25,1)';
+    headline.style.transform = 'translateY(0)';
+    // schedule hide
+    const totalVisible = 3200; // ms
+    setTimeout(() => {
+      alertWrap.classList.remove('show');
+      // clean up text maybe after exit
+      setTimeout(()=> { sr.textContent = ''; }, 600);
+    }, totalVisible);
+  };
+
+  // optional demo trigger (remove or comment this if you don't want auto test)
+  window.addEventListener('load', ()=>{
+    // small automatic test so you can preview placement when loading the page directly
+    setTimeout(()=> { showFollow("CoolViewer123"); }, 650);
+  });
+
+})();
+</script>
 </body>
 </html>
