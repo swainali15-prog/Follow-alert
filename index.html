@@ -369,8 +369,20 @@
     // small automatic test so you can preview placement when loading the page directly
     setTimeout(()=> { showFollow("CoolViewer123"); }, 650);
   });
+  
+// --- TikFinity integration ---
+window.addEventListener("message", (event) => {
+  // TikFinity sends messages like { type: "follow", data: { username: "..." } }
+  if (!event.data || typeof event.data !== "object") return;
+  const msg = event.data;
 
+  if (msg.type === "follow" && msg.data?.username) {
+    showFollow(msg.data.username);
+  }
+});
+  
 })();
 </script>
 </body>
 </html>
+
